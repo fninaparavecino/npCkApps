@@ -1,0 +1,13 @@
+echo "Non NP Experiments ------------------------------"
+./selectiveMatrixAddNonNP --size 1024
+./selectiveMatrixAddNonNP --size 2048
+./selectiveMatrixAddNonNP --size 4086
+./selectiveMatrixAddNonNP --size 8172
+echo "End ------------------------------"
+
+echo "Non NP Experiments ------------------------------"
+./selectiveMatrixAddNP --size 1024
+./selectiveMatrixAddNP --size 2048
+./selectiveMatrixAddNP --size 4086
+./selectiveMatrixAddNP --size 8172
+echo "End ------------------------------"
