@@ -1,10 +1,10 @@
 # enviroment
-CUDA_VERSION = cuda-7.0
+CUDA_VERSION = cuda-7.5
 CPP = g++
 
 NVCC = /usr/local/$(CUDA_VERSION)/bin/nvcc
 SASSI = /usr/local/sassi7/bin/nvcc
-SASSI_LIB_PATH = /home/fanny/SASSI/instlibs/lib
+SASSI_LIB_PATH = /home/fanny/Desktop/Research/Development/SASSI/instlibs/lib
 CUDA_LIB_PATH = /usr/local/$(CUDA_VERSION)/lib64
 
 SOURCEDIR = .
@@ -37,24 +37,15 @@ LINK_OBJS = $(SOURCEDIR)/accl_cu_dlink.o
 
 all: accl
 
-accl: accl_cu_dlink.o
-	$(CPP) -o $(EXE) $(DEVICE_OBJS) $(LINK_OBJS) $(CPP_SOURCES) -L$(CUDA_LIB_PATH) -lcudart -lcuda -lcudadevrt -lpthread -fopenmp
+accl: acclNP.cu
+	$(NVCC) $(NVCCFLAGS) $(ARCH) $< -o acclNP -L$(CUDA_LIB_PATH) -rdc=true -lcudadevrt
 
-accl_cu_dlink.o: accl_cu.o
-	$(NVCC) $(NVCCFLAGS) $(ARCH) -Xcompiler '-fPIC' -dlink $(DEVICE_OBJS) -o $(LINK_OBJS) -lcudadevrt
-
-accl_cu.o: 
-	$(NVCC) $(NVCCFLAGS) $(ARCH) -Xcompiler '-fPIC' -dc -m64 $(CU_SOURCES) -o $(DEVICE_OBJS)
-
-accl_all: accl_all.cu
-	$(NVCC) $(NVCCFLAGS) $(ARCH) $< -o accl_all -L$(CUDA_LIB_PATH) -lcudart -lcuda -lcudadevrt -lpthread
-
-accl_sassi_none: accl_all.cu
-	$(SASSI) -dc $(NVCCFLAGS) $(ARCH) $< -o accl_sassi.o -L$(CUDA_LIB_PATH) -lcudart -lcuda -lcudadevrt -lpthread
+accl_sassi_none: acclNP.cu
+	$(SASSI) -dc $(NVCCFLAGS) $(ARCH) $< -o accl_sassi.o -L$(CUDA_LIB_PATH) -lcudadevrt
 	$(SASSI) accl_sassi.o -o accl_sassi $(ARCH) -L$(SASSI_LIB_PATH) -L$(CUPTI) -lcupti -lcudadevrt
 
 
-accl_sassi: accl_all.cu
+accl_sassi: acclNP.cu
 	$(SASSI) -c $(ARCH) $(BEFORE_MEM) $(BEFORE_MEM_INFO) -dc $(NVCCFLAGS) -o accl_sassi.o $<
 	$(SASSI) accl_sassi.o -o accl_sassi $(ARCH) -L$(SASSI_LIB_PATH) -lmemdiverge -L$(CUPTI) -lcupti -lcudadevrt
 
@@ -63,4 +54,4 @@ clean:
 	rm -f $(LINK_OBJS)
 	rm -f $(EXE)
 	rm -f accl_sassi
-	rm -f accl_all
+	rm -f acclNP

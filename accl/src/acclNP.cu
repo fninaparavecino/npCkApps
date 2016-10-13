@@ -22,16 +22,7 @@
 
 class errorHandler { };
 using namespace std;
-/*
-double getWallTime();
-double getCpuTime();
-void pgmRead(ifstream &file, char *buf);
-image<uchar> *loadPGM(const char *name);
-image<int> *imageUcharToInt(image<uchar> *input);
-void savePGM(image<rgb> *im, const char *name);
-void acclSerial(image<int> *imInt, int *spans, int *components,
-                const int rows, const int cols, image<rgb> *output);
-*/
+
 typedef unsigned char uchar;
 
 typedef struct { uchar r, g, b; } rgb;
@@ -40,7 +31,7 @@ typedef struct { int x; int y; float jth; } threshold;
 
 inline bool operator==(const rgb &a, const rgb &b)
 {
-  return ((a.r == b.r) && (a.g == b.g) && (a.b == b.b));
+	return ((a.r == b.r) && (a.g == b.g) && (a.b == b.b));
 }
 
 template <class T>
@@ -63,17 +54,6 @@ inline bool check_bound(const T &x, const T&min, const T &max)
 {
   return ((x < min) || (x > max));
 }
-
-inline int vlib_round(float x) { return (int)(x + 0.5F); }
-
-inline int vlib_round(double x) { return (int)(x + 0.5); }
-
-inline double gaussian(double val, double sigma)
-{
-  return exp(-square(val/sigma)/2)/(sqrt(2*M_PI)*sigma);
-}
-
-
 
 template <class T>
 class image {
@@ -160,45 +140,72 @@ inline void cudaAssert(cudaError_t code, const char *file, int line, bool abort=
    }
 }
 
-__global__ void findSpansKernel(int *out, int *components, const int *in, const int rows, const uint colsSpans, const uint colsComponents)
+// CUDA kernels
+__global__ void findSpansKernel(int *out, int *components, const int *in,
+                                const int rows, const int cols)
 {
     uint i = (blockIdx.x * blockDim.x) + threadIdx.x;
-    if (i >= rows)
-    	return;
-
+    uint colsSpans = ((cols+2-1)/2)*2;
     int current;
+    int colsComponents = colsSpans/2;
 	bool flagFirst = true;
 	int indexOut = 0;
     int indexComp = 0;
     int comp = i*colsComponents;
-
-	for (int j = 0; j < COLS; j++)
-	{
-		if(flagFirst && in[i*COLS+j]> 0)
-		{
-			current = in[i*COLS+j];
-			out[i*colsSpans+indexOut] = j;
-			indexOut++;
-			flagFirst = false;
-		}
-		if (!flagFirst && in[i*COLS+j] != current)
-		{
-			out[i*colsSpans+indexOut] = j-1;
-			indexOut++;
-			flagFirst = true;
-			// add the respective label
-			components[i*colsComponents+indexComp] = comp;
-			indexComp++;
-			comp++;
-		}
-	}
-	if (!flagFirst)
-	{
-		out[i*colsSpans+indexOut] = COLS - 1;
-		components[i*colsComponents+indexComp] = comp; // add label
-	}
+    if (i<rows)
+    {
+        for (int j = 0; j < cols; j++)
+        {
+            if(flagFirst && in[i*cols+j]> 0)
+            {
+                current = in[i*cols+j];
+                out[i*colsSpans+indexOut] = j;
+                indexOut++;
+                flagFirst = false;
+            }
+            if (!flagFirst && in[i*cols+j] != current)
+            {
+                out[i*colsSpans+indexOut] = j-1;
+                indexOut++;
+                flagFirst = true;
+                /*add the respective label*/
+                components[i*colsComponents+indexComp] = comp;
+                indexComp++;
+                comp++;
+            }
+        }
+        if (!flagFirst)
+        {
+            out[i*colsSpans+indexOut] = cols - 1;
+            /*add the respective label*/
+            components[i*colsComponents+indexComp] = comp;
+        }
+    }
 }
 
+__global__ void relabelKernel(int *components, int previousLabel, int newLabel, const int colsComponents)
+{
+    uint i = (blockIdx.x * blockDim.x) + threadIdx.x;
+    uint j = (blockIdx.y * blockDim.y) + threadIdx.y;
+
+    if(components[i*colsComponents+j]==previousLabel)
+    {
+        components[i*colsComponents+j] = newLabel;
+    }
+}
+
+__global__ void relabel2Kernel(int *components, int previousLabel, int newLabel, const int colsComponents, const int idx, const int frameRows)
+{
+    uint i = (blockIdx.x * blockDim.x) + threadIdx.x;
+    uint j = (blockIdx.y * blockDim.y) + threadIdx.y;
+    i = i*colsComponents+j;
+    i = i +(colsComponents*frameRows*idx);
+    if(components[i]==previousLabel)
+    {
+        components[i] = newLabel;
+    }
+
+}
 __global__ void relabelUnrollKernel(int *components, int previousLabel, int newLabel, const int colsComponents, const int idx, const int frameRows, const int factor)
 {
     uint id_i_child = (blockIdx.x * blockDim.x) + threadIdx.x;
@@ -208,42 +215,43 @@ __global__ void relabelUnrollKernel(int *components, int previousLabel, int newL
     uint i = id_i_child;
     for (int j=id_j_child; j< (colsComponents/factor); j++)
     {
-		if(components[i*colsComponents+j]==previousLabel)
-			components[i*colsComponents+j] = newLabel;
+        if(components[i*colsComponents+j]==previousLabel)
+        {
+            components[i*colsComponents+j] = newLabel;
+        }
     }
-
 }
 __global__ void mergeSpansKernel(int *components, int *spans, const int rows, const int cols, const int frameRows)
 {
     uint idx = (blockIdx.x * blockDim.x) + threadIdx.x;
     uint colsSpans = ((cols+2-1)/2)*2;
     uint colsComponents = colsSpans/2;
-
-    // Merge Spans
+    /*Merge Spans*/
     int startX, endX, newStartX, newEndX;
     int label=-1;
-
-    // Threads and blocks need to relabel the components labels
+    /*threads and blocks need to relabel the components labels*/
     int threads = 16;
-    const int factor = 16;
+    const int factor =4;
 
+    /*--------For 256, 512--------*/
     dim3 threadsPerBlockUnrollRelabel(threads*threads);
     dim3 numBlocksUnrollRelabel((frameRows*factor)/(threads*threads));
+    /*-----------------*/
 
-    for (int i = idx*frameRows; i < ((idx*frameRows)+frameRows)-1; i++) // Compute until penultimate row, since we need the below row to compare
+    for (int i = idx*frameRows; i < ((idx*frameRows)+frameRows)-1; i++) //compute until penultimate row, since we need the below row to compare
     {
-        for (int j = 0; j < colsSpans-1 && spans[i*colsSpans+j] >=0; j=j+2) // Verify if there is a Span available
+        for (int j=0; j < colsSpans-1 && spans[i*colsSpans+j] >=0; j=j+2) //verify if there is a Span available
         {
             startX = spans[i*colsSpans+j];
             endX = spans[i*colsSpans+j+1];
-            int newI = i+1; // line below
-            for (int k=0; k<colsSpans-1 && spans[newI*colsSpans+k] >=0; k=k+2) // Verify if there is a New Span available
+            int newI = i+1; //line below
+            for (int k=0; k<colsSpans-1 && spans[newI*colsSpans+k] >=0; k=k+2) //verify if there is a New Span available
             {
                 newStartX = spans[newI*colsSpans+k];
                 newEndX = spans[newI*colsSpans+k+1];
-                if (startX <= newEndX && endX >= newStartX) // Merge components
+                if (startX <= newEndX && endX >= newStartX)//Merge components
                 {
-                    label = components[i*(colsSpans/2)+(j/2)];          // Choose the startSpan label
+                    label = components[i*(colsSpans/2)+(j/2)];          //choose the startSpan label         
                     relabelUnrollKernel<<<numBlocksUnrollRelabel, threadsPerBlockUnrollRelabel>>>(components, components[newI*(colsSpans/2)+(k/2)], label, colsComponents, idx, frameRows, factor);
 
                     cudaDeviceSynchronize();
@@ -251,7 +259,7 @@ __global__ void mergeSpansKernel(int *components, int *spans, const int rows, co
                     if (err != cudaSuccess)
                         printf("\tError:%s \n", (char)err);
                 }
-                //__syncthreads();
+                __syncthreads();
             }
         }
     }
@@ -264,87 +272,78 @@ void acclCuda(int *out, int *components, const int *in, const uint nFrames,
     int *devComponents = 0;
     int *devOut = 0;
 
-    const uint colsSpans = ((cols+2-1)/2)*2; // ceil(cols/2)*2
-    const uint colsComponents = colsSpans/2;
+    const int colsSpans = ((cols+2-1)/2)*2; /*ceil(cols/2)*2*/
+    const int colsComponents = colsSpans/2;
 
-    // Compute sizes of matrices
-    const int sizeIn = rows * cols;
+    /*compute sizes of matrices*/
+    const int sizeIn = rows * cols;    
     const int sizeComponents = colsComponents*rows;
     const int sizeOut = colsSpans*rows;
 
-    // Block and Grid size
+    /*Block and Grid size*/
     int blockSize;
-    //int minGridSize;
+    int minGridSize;
     int gridSize;
 
-    // Frame Info
+    /*Frame Info*/
     const int frameRows = rows/nFrames;
 
-    // Streams Information
-    // It seems that with 8 Streams is working better. Best performance with 8.
-    uint nFramesPerStream = 8;
-    uint nStreams = nFrames/nFramesPerStream;
+    /*Streams Information*/    
+    uint nFramsPerStream = 2;
+    uint nStreams = nFrames/nFramsPerStream;
 
-   // int rowsOccupancyMax = frameRows * nFramesPerStream;
-   /* cudaErrChk(cudaOccupancyMaxPotentialBlockSize( &minGridSize, &blockSize, findSpansKernel, 0, rowsOccupancyMax));
-    printf("Best Kernel Size\n");
-    printf("-----------------\n");
-    printf("\t Minimum gridSize to achieve high occupancy: %d\n", minGridSize);
-    printf("\t Block Size: %d\n", blockSize);
-    printf("\t Rows Max Occupancy: %d\n", rowsOccupancyMax);
-*/
     cudaEvent_t start, stop;
     float time;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-    // Choose which GPU to run on, change this on a multi-GPU system.
+    /* Choose which GPU to run on, change this on a multi-GPU system.*/
     cudaErrChk(cudaSetDevice(0));
 
-    // Allocate GPU buffers for three vectors (two input, one output)
+    /* Allocate GPU buffers for three vectors (two input, one output)*/
     cudaErrChk(cudaMalloc((void**)&devOut, sizeOut * sizeof(int)));
-    cudaErrChk(cudaMalloc((void**)&devComponents, sizeComponents * sizeof(int)));
+    cudaErrChk(cudaMalloc((void**)&devComponents, sizeComponents * sizeof(int)));    
     cudaErrChk(cudaMalloc((void**)&devIn, sizeIn * sizeof(int)));
-
-    // Copy input vectors from host memory to GPU buffers
+	
+    /* Copy input vectors from host memory to GPU buffers*/
     cudaErrChk(cudaMemcpy(devIn, in, sizeIn * sizeof(int), cudaMemcpyHostToDevice));
-    cudaErrChk(cudaMemcpy(devComponents, components, sizeComponents * sizeof(int), cudaMemcpyHostToDevice));
+    cudaErrChk(cudaMemcpy(devComponents, components, sizeComponents * sizeof(int),
+                          cudaMemcpyHostToDevice));
     cudaErrChk(cudaMemcpy(devOut, out, sizeOut * sizeof(int), cudaMemcpyHostToDevice));
 
-    // Launch streams
-    //cudaStream_t *streams = (cudaStream_t *) malloc(nStreams * sizeof(cudaStream_t));
-    //for (int i = 0; i < nStreams; i++)
-    //    cudaErrChk(cudaStreamCreate(&(streams[i])));
-
-    // Variables for streaming
+    /*launch streams*/
+    cudaStream_t *streams = (cudaStream_t *) malloc(nStreams * sizeof(cudaStream_t));
+    for (int i = 0; i < nStreams; i++)
+    {
+        cudaErrChk(cudaStreamCreate(&(streams[i])));
+    }
+    /*variables for streaming*/
     const int frameSpansSize = rows/nStreams * colsSpans;
     const int frameCompSize = rows/nStreams * colsComponents;
 
-    // Round up according to array size
-    blockSize = 512;
+    /* Round up according to array size */
+    blockSize = 256;
     gridSize = (rows/nStreams)/blockSize;
+    //gridSize = rows/blockSize;
 
-    // Launch a kernel on the GPU with one thread for each element
+    /* Launch a kernel on the GPU with one thread for each element*/
     printf("Number of frames processed: %d\n", nFrames);
     printf("Number of streams created: %d\n", nStreams);
     cudaEventRecord(start, 0);      /*measure time*/
-//#pragma unroll
-//    for(int i=0; i<nStreams; ++i)
-//  {
-       	findSpansKernel<<<gridSize, blockSize>>>(devOut, devComponents, devIn, rows, colsSpans, colsComponents);
-
-	/*findSpansKernel<<<gridSize, blockSize, 0, streams[i]>>>(&devOut[i*frameSpansSize],
+    for(int i=0; i<nStreams; ++i)
+    {
+        findSpansKernel<<<gridSize, blockSize>>>(&devOut[i*frameSpansSize],
                 &devComponents[i*frameCompSize], &devIn[i*frameSpansSize],
-                rows, colsSpans, colsComponents);*/
+                rows, cols);
 
-//        mergeSpansKernel<<<1, nFramesPerStream, 0, streams[i]>>>(&devComponents[i*frameCompSize],
-//                                                 &devOut[i*frameSpansSize],
-//                                                 rows,
-//                                                 cols,
-//                                                 frameRows);
-   // }
-
-    // Copy device to host
+        /*Merge Spans*/
+        mergeSpansKernel<<<1, nFramsPerStream>>>(&devComponents[i*frameCompSize],
+                                                 &devOut[i*frameSpansSize],
+                                                 rows,
+                                                 cols,
+                                                 frameRows);
+    }
+    /* Copy device to host*/
     cudaErrChk(cudaMemcpy(components, devComponents, sizeComponents * sizeof(int),
                           cudaMemcpyDeviceToHost));
     cudaErrChk(cudaMemcpy(out, devOut, sizeOut * sizeof(int),
@@ -354,8 +353,7 @@ void acclCuda(int *out, int *components, const int *in, const uint nFrames,
     cudaEventSynchronize(stop);
 
     cudaEventElapsedTime(&time, start, stop);
-    printf ("\nTime kernel execution: %.2f ms", time);
-    printf ("\nPerformance: %.2f MPx/s", (rows*cols)/(time*1000) );
+    printf ("Time kernel execution: %f ms\n", time);
 
     /* Analysis of occupancy*/
     int maxActiveBlocks;
@@ -370,13 +368,13 @@ void acclCuda(int *out, int *components, const int *in, const uint nFrames,
                       (float)(props.maxThreadsPerMultiProcessor /
                               props.warpSize);
 
-    printf("\n\nOccupancy Results\n");
+    printf("Occupancy Results\n");
     printf("-----------------\n");
     printf("\t Block Size: %d\n", blockSize);
     printf("\t Grid Size: %d\n", gridSize);
     printf("\t Theoretical occupancy: %f\n", occupancy);
 
-    /*Frge*/
+    /*Free*/
     cudaFree(devOut);
     cudaFree(devIn);
     cudaFree(devComponents);
@@ -635,8 +633,8 @@ int main()
     cout<<"Loading input image..." << endl;
     // Number of frames
     // We need to define the input of nFrames
-    image<uchar> *input = loadPGM("../data/8Frames.pgm");
-    const uint nFrames = 8;
+    image<uchar> *input = loadPGM("../data/4Frames.pgm");
+    const uint nFrames = 4;
 
     const int width = input->width();
     const int height = input->height();
