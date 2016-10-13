@@ -266,13 +266,42 @@ __global__ void mergeSpansKernel(int *components, int *spans, const int rows, co
 //							}
 //						}
 //					}
-                    for (int p = idx*frameRows; p<=i+1; p++)                          /*relabel*/
+                    for (int p = idx*frameRows; p <= i+1; p++)                          /*relabel*/
 					{
-						for(int q = 0; q < colsComponents; q++)
+						for(int q = 0; q < colsComponents/8; q=q+8)
 						{
-							if(components[p*(colsSpans/2)+q]==components[newI*colsComponents+(k/2)])
+							if(components[p*colsComponents+q]==components[newI*colsComponents+(k/2)])
 							{
-								components[p*(colsSpans/2)+q] = label;
+								components[p*colsComponents+q] = label;
+							}
+							if(components[p*colsComponents+q+1]==components[newI*colsComponents+(k/2)])
+							{
+								components[p*colsComponents+q+1] = label;
+							}
+							if(components[p*colsComponents+q+2]==components[newI*colsComponents+(k/2)])
+							{
+								components[p*colsComponents+q+2] = label;
+							}
+							if(components[p*colsComponents+q+3]==components[newI*colsComponents+(k/2)])
+							{
+								components[p*colsComponents+q+3] = label;
+							}
+							
+							if(components[p*colsComponents+q+4]==components[newI*colsComponents+(k/2)])
+							{
+								components[p*colsComponents+q+4] = label;
+							}
+							if(components[p*colsComponents+q+5]==components[newI*colsComponents+(k/2)])
+							{
+								components[p*colsComponents+q+5] = label;
+							}
+							if(components[p*colsComponents+q+6]==components[newI*colsComponents+(k/2)])
+							{
+								components[p*colsComponents+q+6] = label;
+							}
+							if(components[p*colsComponents+q+7]==components[newI*colsComponents+(k/2)])
+							{
+								components[p*colsComponents+q+7] = label;
 							}
 						}
 					}
@@ -348,6 +377,8 @@ void acclCuda(int *out, int *components, const int *in, const uint nFrames,
     /* Launch a kernel on the GPU with one thread for each element*/
     printf("Number of frames processed: %d\n", nFrames);
     printf("Number of streams created: %d\n", nStreams);
+    printf("Grid Configuration findSpans blocks: %d and threadsPerBlock:%d \n", gridSize, blockSize);
+    printf("Grid Configuration MergeSpans blocks: %d and threadsPerBlock:%d \n", 1, nFramsPerStream);
     cudaEventRecord(start, 0);      /*measure time*/
     for(int i=0; i<nStreams; ++i)
     {
