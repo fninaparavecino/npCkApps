@@ -251,15 +251,34 @@ __global__ void mergeSpansKernel(int *components, int *spans, const int rows, co
                 newEndX = spans[newI*colsSpans+k+1];
                 if (startX <= newEndX && endX >= newStartX)//Merge components
                 {
-                    label = components[i*(colsSpans/2)+(j/2)];          //choose the startSpan label         
-                    relabelUnrollKernel<<<numBlocksUnrollRelabel, threadsPerBlockUnrollRelabel>>>(components, components[newI*(colsSpans/2)+(k/2)], label, colsComponents, idx, frameRows, factor);
+                    label = components[i*(colsSpans/2)+(j/2)];          //choose the startSpan label
+                    
+                    // Relabel
+//                    __syncthreads();
+//                    for (int q = idx*frameRows; q <= i+1; q++)
+//					{
+//						for (int r=0; r < k/2; r++)
+//						{
+//							if(components[q*colsComponents+r]==components[newI*(colsSpans/2)+(k/2)])
+//							{
+//								components[q*colsComponents+r] = label;
+//								__syncthreads();
+//							}
+//						}
+//					}
+                    for (int p = idx*frameRows; p<=i+1; p++)                          /*relabel*/
+					{
+						for(int q = 0; q < colsComponents; q++)
+						{
+							if(components[p*(colsSpans/2)+q]==components[newI*colsComponents+(k/2)])
+							{
+								components[p*(colsSpans/2)+q] = label;
+							}
+						}
+					}
+//                    relabelUnrollKernel<<<numBlocksUnrollRelabel, threadsPerBlockUnrollRelabel>>>(components, components[newI*(colsSpans/2)+(k/2)], label, colsComponents, idx, frameRows, factor);
 
-                    cudaDeviceSynchronize();
-                    cudaError_t err = cudaGetLastError();
-                    if (err != cudaSuccess)
-                        printf("\tError:%s \n", (char)err);
                 }
-                //__syncthreads();
             }
         }
     }

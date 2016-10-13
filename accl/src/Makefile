@@ -35,10 +35,13 @@ DEVICE_OBJS = $(SOURCEDIR)/accl_cu.o
 
 LINK_OBJS = $(SOURCEDIR)/accl_cu_dlink.o
 
-all: accl
+all: acclNP
 
-accl: acclNP.cu
+acclNP: acclNP.cu
 	$(NVCC) $(NVCCFLAGS) $(ARCH) $< -o acclNP -L$(CUDA_LIB_PATH) -rdc=true -lcudadevrt
+	
+acclNonNP: acclNonNP.cu
+	$(NVCC) $(NVCCFLAGS) $(ARCH) $< -o acclNonNP -L$(CUDA_LIB_PATH) -rdc=true -lcudadevrt
 
 accl_sassi_none: acclNP.cu
 	$(SASSI) -dc $(NVCCFLAGS) $(ARCH) $< -o accl_sassi.o -L$(CUDA_LIB_PATH) -lcudadevrt
