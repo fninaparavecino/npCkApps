@@ -37,7 +37,7 @@ LINK_OBJS = $(SOURCEDIR)/accl_cu_dlink.o
 
 all: accl
 
-accl: acclNP.cu
+acclNP: acclNP.cu
 	$(NVCC) $(NVCCFLAGS) $(ARCH) $< -o acclNP -L$(CUDA_LIB_PATH) -rdc=true -lcudadevrt
 
 accl_sassi_none: acclNP.cu

@@ -259,7 +259,7 @@ __global__ void mergeSpansKernel(int *components, int *spans, const int rows, co
                     if (err != cudaSuccess)
                         printf("\tError:%s \n", (char)err);
                 }
-                __syncthreads();
+                //__syncthreads();
             }
         }
     }
