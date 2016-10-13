@@ -240,12 +240,12 @@ __global__ void mergeSpansKernel(int *components, int *spans, const int rows, co
 
     for (int i = idx*frameRows; i < ((idx*frameRows)+frameRows)-1; i++) //compute until penultimate row, since we need the below row to compare
     {
-        for (int j=0; j < colsSpans-1 && spans[i*colsSpans+j] >=0; j=j+2) //verify if there is a Span available
+        for (int j=0; j < colsSpans/4 && spans[i*colsSpans+j] >=0; j=j+2) //verify if there is a Span available
         {
             startX = spans[i*colsSpans+j];
             endX = spans[i*colsSpans+j+1];
             int newI = i+1; //line below
-            for (int k=0; k<colsSpans-1 && spans[newI*colsSpans+k] >=0; k=k+2) //verify if there is a New Span available
+            for (int k=0; k<colsSpans/4 && spans[newI*colsSpans+k] >=0; k=k+2) //verify if there is a New Span available
             {
                 newStartX = spans[newI*colsSpans+k];
                 newEndX = spans[newI*colsSpans+k+1];
@@ -268,7 +268,7 @@ __global__ void mergeSpansKernel(int *components, int *spans, const int rows, co
 //					}
                     for (int p = idx*frameRows; p <= i+1; p++)                          /*relabel*/
 					{
-						for(int q = 0; q < colsComponents/8; q=q+8)
+						for(int q = 0; q < colsComponents/128; q=q+8)
 						{
 							if(components[p*colsComponents+q]==components[newI*colsComponents+(k/2)])
 							{
@@ -330,15 +330,14 @@ void acclCuda(int *out, int *components, const int *in, const uint nFrames,
 
     /*Block and Grid size*/
     int blockSize;
-    int minGridSize;
     int gridSize;
 
     /*Frame Info*/
     const int frameRows = rows/nFrames;
 
     /*Streams Information*/    
-    uint nFramsPerStream = 2;
-    uint nStreams = nFrames/nFramsPerStream;
+    uint nFramesPerStream = 2;
+    uint nStreams = nFrames/nFramesPerStream;
 
     cudaEvent_t start, stop;
     float time;
@@ -359,18 +358,12 @@ void acclCuda(int *out, int *components, const int *in, const uint nFrames,
                           cudaMemcpyHostToDevice));
     cudaErrChk(cudaMemcpy(devOut, out, sizeOut * sizeof(int), cudaMemcpyHostToDevice));
 
-    /*launch streams*/
-    cudaStream_t *streams = (cudaStream_t *) malloc(nStreams * sizeof(cudaStream_t));
-    for (int i = 0; i < nStreams; i++)
-    {
-        cudaErrChk(cudaStreamCreate(&(streams[i])));
-    }
     /*variables for streaming*/
     const int frameSpansSize = rows/nStreams * colsSpans;
     const int frameCompSize = rows/nStreams * colsComponents;
 
     /* Round up according to array size */
-    blockSize = 512;
+    blockSize = 1024;
     gridSize = (rows/nStreams)/blockSize;
     //gridSize = rows/blockSize;
 
@@ -378,14 +371,14 @@ void acclCuda(int *out, int *components, const int *in, const uint nFrames,
     printf("Number of frames processed: %d\n", nFrames);
     printf("Number of streams created: %d\n", nStreams);
     printf("Grid Configuration findSpans blocks: %d and threadsPerBlock:%d \n", gridSize, blockSize);
-    printf("Grid Configuration MergeSpans blocks: %d and threadsPerBlock:%d \n", 1, nFramsPerStream);
+    printf("Grid Configuration MergeSpans blocks: %d and threadsPerBlock:%d \n", 1, nFramesPerStream);
     cudaEventRecord(start, 0);      /*measure time*/
     for(int i=0; i<nStreams; ++i)
     {
         findSpansKernel<<<gridSize, blockSize>>>(&devOut[i*frameSpansSize],
                 &devComponents[i*frameCompSize], &devIn[i*frameSpansSize],
                 rows, cols);
-        mergeSpansKernel<<<1, nFramsPerStream>>>(&devComponents[i*frameCompSize],
+        mergeSpansKernel<<<1, nFramesPerStream>>>(&devComponents[i*frameCompSize],
                                                  &devOut[i*frameSpansSize],
                                                  rows,
                                                  cols,

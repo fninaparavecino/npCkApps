@@ -289,7 +289,7 @@ void acclCuda(int *out, int *components, const int *in, const uint nFrames,
     const int frameRows = rows/nFrames;
 
     /*Streams Information*/    
-    uint nFramsPerStream = 2;
+    uint nFramsPerStream = 1;
     uint nStreams = nFrames/nFramsPerStream;
 
     cudaEvent_t start, stop;
