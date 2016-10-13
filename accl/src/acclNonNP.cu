@@ -266,44 +266,44 @@ __global__ void mergeSpansKernel(int *components, int *spans, const int rows, co
 //							}
 //						}
 //					}
-                    for (int p = idx*frameRows; p <= i+1; p++)                          /*relabel*/
+                    for (int p = idx*frameRows; p <= newI; p++)                          /*relabel*/
 					{
-						for(int q = 0; q < colsComponents/128; q=q+8)
-						{
-							if(components[p*colsComponents+q]==components[newI*colsComponents+(k/2)])
+//						for(int q = 0; q < colsComponents/128; q=q+8)
+//						{
+							if(components[p*colsComponents]==components[newI*colsComponents+(k/2)])
 							{
-								components[p*colsComponents+q] = label;
+								components[p*colsComponents] = label;
 							}
-							if(components[p*colsComponents+q+1]==components[newI*colsComponents+(k/2)])
+							if(components[p*colsComponents+1]==components[newI*colsComponents+(k/2)])
 							{
-								components[p*colsComponents+q+1] = label;
+								components[p*colsComponents+1] = label;
 							}
-							if(components[p*colsComponents+q+2]==components[newI*colsComponents+(k/2)])
+							if(components[p*colsComponents+2]==components[newI*colsComponents+(k/2)])
 							{
-								components[p*colsComponents+q+2] = label;
+								components[p*colsComponents+2] = label;
 							}
-							if(components[p*colsComponents+q+3]==components[newI*colsComponents+(k/2)])
+							if(components[p*colsComponents+3]==components[newI*colsComponents+(k/2)])
 							{
-								components[p*colsComponents+q+3] = label;
+								components[p*colsComponents+3] = label;
 							}
 							
-							if(components[p*colsComponents+q+4]==components[newI*colsComponents+(k/2)])
+							if(components[p*colsComponents+4]==components[newI*colsComponents+(k/2)])
 							{
-								components[p*colsComponents+q+4] = label;
+								components[p*colsComponents+4] = label;
 							}
-							if(components[p*colsComponents+q+5]==components[newI*colsComponents+(k/2)])
+							if(components[p*colsComponents+5]==components[newI*colsComponents+(k/2)])
 							{
-								components[p*colsComponents+q+5] = label;
+								components[p*colsComponents+5] = label;
 							}
-							if(components[p*colsComponents+q+6]==components[newI*colsComponents+(k/2)])
+							if(components[p*colsComponents+6]==components[newI*colsComponents+(k/2)])
 							{
-								components[p*colsComponents+q+6] = label;
+								components[p*colsComponents+6] = label;
 							}
-							if(components[p*colsComponents+q+7]==components[newI*colsComponents+(k/2)])
+							if(components[p*colsComponents+7]==components[newI*colsComponents+(k/2)])
 							{
-								components[p*colsComponents+q+7] = label;
+								components[p*colsComponents+7] = label;
 							}
-						}
+						//}
 					}
 //                    relabelUnrollKernel<<<numBlocksUnrollRelabel, threadsPerBlockUnrollRelabel>>>(components, components[newI*(colsSpans/2)+(k/2)], label, colsComponents, idx, frameRows, factor);
 
@@ -395,27 +395,6 @@ void acclCuda(int *out, int *components, const int *in, const uint nFrames,
                           cudaMemcpyDeviceToHost));
     cudaErrChk(cudaMemcpy(out, devOut, sizeOut * sizeof(int),
                           cudaMemcpyDeviceToHost));
-
-    
-
-    /* Analysis of occupancy*/
-    int maxActiveBlocks;
-    cudaOccupancyMaxActiveBlocksPerMultiprocessor( &maxActiveBlocks,
-                                                   findSpansKernel, blockSize,0);
-
-    int device;
-    cudaDeviceProp props;
-    cudaGetDevice(&device);
-    cudaGetDeviceProperties(&props, device);
-    float occupancy = (maxActiveBlocks * blockSize / props.warpSize) /
-                      (float)(props.maxThreadsPerMultiProcessor /
-                              props.warpSize);
-
-    printf("Occupancy Results\n");
-    printf("-----------------\n");
-    printf("\t Block Size: %d\n", blockSize);
-    printf("\t Grid Size: %d\n", gridSize);
-    printf("\t Theoretical occupancy: %f\n", occupancy);
 
     /*Free*/
     cudaFree(devOut);
