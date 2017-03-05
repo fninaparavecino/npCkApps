@@ -655,8 +655,8 @@ int main()
     cout<<"Loading input image..." << endl;
     // Number of frames
     // We need to define the input of nFrames
-    image<uchar> *input = loadPGM("../data/2Frames.pgm");
-    const uint nFrames = 2;
+    image<uchar> *input = loadPGM("../data/8Frames.pgm");
+    const uint nFrames = 8;
 
     const int width = input->width();
     const int height = input->height();

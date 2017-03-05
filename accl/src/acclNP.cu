@@ -237,7 +237,6 @@ __global__ void mergeSpansKernel(int *components, int *spans, const int rows, co
     dim3 threadsPerBlockUnrollRelabel(threads*threads);
     dim3 numBlocksUnrollRelabel((frameRows*factor)/(threads*threads));
     /*-----------------*/
-
     for (int i = idx*frameRows; i < ((idx*frameRows)+frameRows)-1; i++) //compute until penultimate row, since we need the below row to compare
     {
         for (int j=0; j < colsSpans-1 && spans[i*colsSpans+j] >=0; j=j+2) //verify if there is a Span available
@@ -633,8 +632,8 @@ int main()
     cout<<"Loading input image..." << endl;
     // Number of frames
     // We need to define the input of nFrames
-    image<uchar> *input = loadPGM("../data/2Frames.pgm");
-    const uint nFrames = 2;
+    image<uchar> *input = loadPGM("../data/8Frames.pgm");
+    const uint nFrames = 8;
 
     const int width = input->width();
     const int height = input->height();
