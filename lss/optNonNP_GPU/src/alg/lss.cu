@@ -41,10 +41,6 @@ __global__ void evolveContour(
 		unsigned int* totalIterations ){
         int tid = threadIdx.x;
 
-	// Setting up streams for
-	//cudaStream_t stream;
-	//cudaStreamCreateWithFlags (&stream, cudaStreamNonBlocking);
-
 	// Total iterations
 	totalIterations = &totalIterations[tid];
 
@@ -63,339 +59,176 @@ __global__ void evolveContour(
 
 	dim3 dimGrid(gridXSize, gridYSize);
 	dim3 dimBlock(BLOCK_TILE_SIZE, BLOCK_TILE_SIZE);
+	printf("Grid: %d x %d, with block: %d x %d \n", dimGrid.x, dimGrid.y, dimBlock.x, dimBlock.y);
+	// Including border
+
+	unsigned char intensityTilexx, intensityTilexy, intensityTileyx,intensityTileyy; // input
+	unsigned char     labelTilexx, labelTilexy, labelTileyx, labelTileyy; // input
+	signed char       phiTilexx, phiTilexy, phiTileyx, phiTileyy; // output
+
 	// step 1
-	for(int tx= 0; tx < dimBlock.x; tx++){
-		for(int ty= 0; ty < dimBlock.y; ty++){
-			for(int bx=0; bx < dimGrid.x; bx++){
-				for(int by=0; by < dimGrid.y; by++){
+	for(int tx= 0; tx < dimBlock.x*dimGrid.x; tx++){
+		for(int ty= 0; ty < dimBlock.y*dimGrid.y; ty++){
 
-					int blockId = by*dimGrid.x+bx;
+			volatile int localGBI; // Flags
 
-					// Including border
-					__shared__ unsigned char intensityTile[TILE_SIZE][TILE_SIZE+1]; // input
-					__shared__ unsigned char     labelTile[TILE_SIZE][TILE_SIZE+1]; // input
-					__shared__   signed char       phiTile[TILE_SIZE][TILE_SIZE+1]; // output
+			//int blockId = by*dimGrid.x+bx;
+			// Read Input Data into Shared Memory
+			/////////////////////////////////////////////////////////////////////////////////////
 
-					// Flags
-					__shared__ volatile int localGBI;
+			int x = (tx/dimBlock.x)<<BTSB;
+			x = x + tx;
+			x = x<<TTSB;
+			int y = (ty/dimBlock.y)<<BTSB;
+			y = y + ty;
+			y = y<<TTSB;
 
-					// Read Input Data into Shared Memory
-					/////////////////////////////////////////////////////////////////////////////////////
+			int location = 	(((x>>TTSB)&BTSMask)                ) |
+					(((y>>TTSB)&BTSMask) << BTSB        ) |
+					((x>>TSB)            << (BTSB+BTSB) ) ;
+			location += 	((y>>TSB)<<(BTSB+BTSB))*gridDim.x;
 
-					int x = bx<<BTSB;
-					x = x + tx;
-					x = x<<TTSB;
-					int y = by<<BTSB;
-					y = y + ty;
-					y = y<<TTSB;
+			int intensityData = intensity[location];
+			int     labelData = labels[location];
 
-					int location = 	(((x>>TTSB)&BTSMask)                ) |
-							(((y>>TTSB)&BTSMask) << BTSB        ) |
-							((x>>TSB)            << (BTSB+BTSB) ) ;
-					location += 	((y>>TSB)<<(BTSB+BTSB))*gridDim.x;
+			// int sharedX = tx*THREAD_TILE_SIZE;
+			// int sharedY = ty*THREAD_TILE_SIZE;
 
-					int intensityData = intensity[location];
-					int     labelData = labels[location];
+			labelTilexx = labelData         & 0xFF;
+			labelTilexy = (labelData >>  8) & 0xFF;
+			labelTileyx = (labelData >> 16) & 0xFF;
+			labelTileyy = (labelData >> 24) & 0xFF;
 
-					int sharedX = tx*THREAD_TILE_SIZE;
-					int sharedY = ty*THREAD_TILE_SIZE;
+			intensityTilexx = intensityData         & 0xFF;
+			intensityTilexy = (intensityData >>  8) & 0xFF;
+			intensityTileyx = (intensityData >> 16) & 0xFF;
+			intensityTileyy = (intensityData >> 24) & 0xFF;
 
-					labelTile[sharedY  ][sharedX  ] = labelData         & 0xFF;
-					labelTile[sharedY  ][sharedX+1] = (labelData >>  8) & 0xFF;
-					labelTile[sharedY+1][sharedX  ] = (labelData >> 16) & 0xFF;
-					labelTile[sharedY+1][sharedX+1] = (labelData >> 24) & 0xFF;
+			localGBI = 0;
 
-					intensityTile[sharedY  ][sharedX  ] = intensityData         & 0xFF;
-					intensityTile[sharedY  ][sharedX+1] = (intensityData >>  8) & 0xFF;
-					intensityTile[sharedY+1][sharedX  ] = (intensityData >> 16) & 0xFF;
-					intensityTile[sharedY+1][sharedX+1] = (intensityData >> 24) & 0xFF;
+			// Algorithm
+			/////////////////////////////////////////////////////////////////////////////////////
 
-					localGBI = 0;
-
-					// Algorithm
-					/////////////////////////////////////////////////////////////////////////////////////
-
-					// Initialization
-					for (int tempY = ty; tempY < TILE_SIZE; tempY+=BLOCK_TILE_SIZE ){
-						for (int tempX = tx; tempX < TILE_SIZE; tempX+=BLOCK_TILE_SIZE ){
-
-							int ownIntData = intensityTile[tempY][tempX];
-							if(ownIntData >= lowerIntensityBounds[tid] &&
-							   ownIntData <= lowerIntensityBounds[tid]) {
-								if (labelTile[tempY][tempX] == targetLabels[tid])
-									phiTile[tempY][tempX] = 3;
-								else {
-									localGBI = 1;
-									phiTile[tempY][tempX] = 1;
-								}
-							} else {
-								if (labelTile[tempY][tempX] == targetLabels[tid]){
-									phiTile[tempY][tempX] = 4;
-									localGBI = 1;
-								} else {
-									phiTile[tempY][tempX] = 0;
-								}
-							}
-						}
-					}
-					// Write back to main memory
-					int phiData1 = phiTile[sharedY  ][sharedX  ] & 0xFF;
-	        int phiData2 = phiTile[sharedY  ][sharedX+1] & 0xFF;
-	        int phiData3 = phiTile[sharedY+1][sharedX  ] & 0xFF;
-	        int phiData4 = phiTile[sharedY+1][sharedX+1] & 0xFF;
-
-	        int phiReturnData = phiData1        |
-							   							(phiData2 << 8 ) |
-							   							(phiData3 << 16) |
-							   							(phiData4 << 24);
-
-					phi[location] = phiReturnData;
-					if (tx == 0 && ty == 0 && localGBI){
-						globalBlockIndicator[blockId] = 1;
-					}
+			// Initialization
+			int ownIntData = intensityTilexx;
+			if(ownIntData >= lowerIntensityBounds[tid] &&
+			   ownIntData <= lowerIntensityBounds[tid]) {
+				if (labelTilexx == targetLabels[tid])
+					phiTilexx = 3;
+				else {
+					localGBI = 1;
+					phiTilexx = 1;
 				}
+			} else {
+				if (labelTilexx == targetLabels[tid]){
+					phiTilexx = 4;
+					localGBI = 1;
+				} else {
+					phiTilexx = 0;
+				}
+			}
+
+			ownIntData = intensityTilexy;
+			if(ownIntData >= lowerIntensityBounds[tid] &&
+			   ownIntData <= lowerIntensityBounds[tid]) {
+				if (labelTilexy == targetLabels[tid])
+					phiTilexy = 3;
+				else {
+					localGBI = 1;
+					phiTilexy = 1;
+				}
+			} else {
+				if (labelTilexy == targetLabels[tid]){
+					phiTilexy = 4;
+					localGBI = 1;
+				} else {
+					phiTilexy = 0;
+				}
+			}
+
+			ownIntData = intensityTileyx;
+			if(ownIntData >= lowerIntensityBounds[tid] &&
+			   ownIntData <= lowerIntensityBounds[tid]) {
+				if (labelTileyx == targetLabels[tid])
+					phiTileyx = 3;
+				else {
+					localGBI = 1;
+					phiTileyx = 1;
+				}
+			} else {
+				if (labelTileyx == targetLabels[tid]){
+					phiTileyx = 4;
+					localGBI = 1;
+				} else {
+					phiTileyx = 0;
+				}
+			}
+
+			ownIntData = intensityTileyy;
+			if(ownIntData >= lowerIntensityBounds[tid] &&
+			   ownIntData <= lowerIntensityBounds[tid]) {
+				if (labelTileyy == targetLabels[tid])
+					phiTileyy = 3;
+				else {
+					localGBI = 1;
+					phiTileyy = 1;
+				}
+			} else {
+				if (labelTileyy == targetLabels[tid]){
+					phiTileyx = 4;
+					localGBI = 1;
+				} else {
+					phiTileyy = 0;
+				}
+			}
+
+	    int phiReturnData = phiTilexx        |
+					   							(phiTilexy << 8 ) |
+					   							(phiTileyx << 16) |
+					   							(phiTileyy << 24);
+			// int phiReturnData = intensityTilexx        |
+			// 		   							(intensityTilexy << 8 ) |
+			// 		   							(intensityTileyx << 16) |
+			// 		   							(intensityTileyy << 24);
+
+			phi[location] = phiReturnData;
+			// phiOut[location] = phiReturnData;
+			if (tx == 0 && ty == 0 && localGBI){
+				globalBlockIndicator[(ty/dimBlock.x)*dimGrid.x+(tx/dimBlock.x)] = 1;
 			}
 		}
 	}
+
 	int iterations = 0;
+	// Including border
+	// __shared__ signed char phiTile[TILE_SIZE+2][TILE_SIZE+2+1]; // input/output
+
+	// Flags
+	char BlockChange;
+	char change;
+	int redoBlock;
+
 	do {
 		iterations++;
 		//step 2
-		for(int tx= 0; tx < dimBlock.x; tx++){
-			for(int ty= 0; ty < dimBlock.y; ty++){
-				for(int bx=0; bx < dimGrid.x; bx++){
-					for(int by=0; by < dimGrid.y; by++){
-						int blockId = by*dimGrid.x+bx;
+		for(int tx= 0; tx < dimBlock.x * dimGrid.x; tx++){
+			for(int ty= 0; ty < dimBlock.y * dimGrid.y; ty++){
+				int blockId = (ty/dimBlock.x)*dimGrid.x+(tx/dimBlock.x);
 
-						// Including border
-						__shared__ signed char phiTile[TILE_SIZE+2][TILE_SIZE+2+1]; // input/output
+				// Read Global Block Indicator from global memory
+				int localGBI = globalBlockIndicator[blockId];
 
-						// Flags
-						__shared__ volatile char BlockChange;
-						__shared__ volatile char change;
-						__shared__ volatile  int redoBlock;
+				// Set Block Variables
+				redoBlock = 0;
 
-						// Read Global Block Indicator from global memory
-						int localGBI = globalBlockIndicator[blockId];
-
-						// Set Block Variables
-						redoBlock = 0;
-
-						if (localGBI) {
-
-							// Read Input Data into Shared Memory
-							/////////////////////////////////////////////////////////////////////////////////////
-
-							int x = bx<<BTSB;
-							x = x + tx;
-							x = x<<TTSB;
-							int y = by<<BTSB;
-							y = y + ty;
-							y = y<<TTSB;
-
-							int location = 	(((x>>TTSB)&BTSMask)                ) |
-									(((y>>TTSB)&BTSMask) << BTSB        ) |
-									((x>>TSB)            << (BTSB+BTSB) ) ;
-							location += 	((y>>TSB)<<(BTSB+BTSB))*gridDim.x;
-
-							int phiData = phi[location];
-
-							int sharedX = tx*THREAD_TILE_SIZE+1;
-							int sharedY = ty*THREAD_TILE_SIZE+1;
-
-							phiTile[sharedY  ][sharedX  ] = phiData         & 0xFF;
-							phiTile[sharedY  ][sharedX+1] = (phiData >>  8) & 0xFF;
-							phiTile[sharedY+1][sharedX  ] = (phiData >> 16) & 0xFF;
-							phiTile[sharedY+1][sharedX+1] = (phiData >> 24) & 0xFF;
-
-							// Read Border Data into Shared Memory
-							/////////////////////////////////////////////////////////////////////////////////////
-
-							// Registers meant for speed. Two given each thread will update 2 pixels.
-							int shiftTileReg1 = 0;
-							int shiftTileReg2 = 0;
-
-							int borderXLoc = 0;
-							int borderYLoc = 0;
-
-							// Needed Variables
-							int bLocation;
-							int borderPhiData;
-
-							// Update horizontal border
-							borderXLoc = sharedX;
-							if (ty == 0 ){
-								// Location to write in shared memory
-								borderYLoc = 0;
-								if (by != 0) {
-									// Upper block border
-									y-=THREAD_TILE_SIZE;
-									shiftTileReg1 = 16;
-									shiftTileReg2 = 24;
-								}
-							} else if (ty == BLOCK_TILE_SIZE-1){
-								// Location to write in shared memory
-								borderYLoc = TILE_SIZE+1;
-								if (by != gridDim.y-1) {
-									// Lower block border
-									y+=THREAD_TILE_SIZE;
-									shiftTileReg1 = 0;
-									shiftTileReg2 = 8;
-								}
-							}
-							// Read from global and write to shared memory
-							if (ty == 0 || ty == BLOCK_TILE_SIZE-1) {
-								if ((by == 0           && ty == 0                ) ||
-										(by == gridDim.y-1 && ty == BLOCK_TILE_SIZE-1)){
-									phiTile[borderYLoc][borderXLoc  ] = 0;
-									phiTile[borderYLoc][borderXLoc+1] = 0;
-								} else {
-									bLocation = (((x>>TTSB)&BTSMask)                 ) |
-												(((y>>TTSB)&BTSMask)  << BTSB        ) |
-												 ((x>>TSB)            << (BTSB+BTSB) ) ;
-									bLocation += ((y>>TSB)<<(BTSB+BTSB))*gridDim.x;
-
-									borderPhiData = phi[bLocation];
-
-									phiTile[borderYLoc][borderXLoc  ]
-											= ( borderPhiData >> shiftTileReg1 ) & 0xFF;
-									phiTile[borderYLoc][borderXLoc+1]
-											= ( borderPhiData >> shiftTileReg2 ) & 0xFF;
-								}
-							}
-
-							// Update vertical border
-							x = bx<<BTSB;
-							x = x + tx;
-							x = x<<TTSB;
-							y = by<<BTSB;
-							y = y + ty;
-							y = y<<TTSB;
-
-							borderYLoc = sharedY;
-							if (tx == 0 ){
-								// Location to write in shared memory
-								borderXLoc = 0;
-								if (bx != 0) {
-									// Upper block border
-									x-=THREAD_TILE_SIZE;
-									shiftTileReg1 = 8;
-									shiftTileReg2 = 24;
-								}
-							} else if (tx == BLOCK_TILE_SIZE-1){
-								// Location to write in shared memory
-								borderXLoc = TILE_SIZE+1;
-								if (bx != gridDim.x-1) {
-									// Lower block border
-									x+=THREAD_TILE_SIZE;
-									shiftTileReg1 = 0;
-									shiftTileReg2 = 16;
-								}
-							}
-							// Read from global and write to shared memory
-							if (tx == 0 || tx == BLOCK_TILE_SIZE-1) {
-								if ((bx == 0           && tx == 0                ) ||
-										(bx == gridDim.x-1 && tx == BLOCK_TILE_SIZE-1)){
-									phiTile[borderYLoc][borderXLoc  ] = 0;
-									phiTile[borderYLoc+1][borderXLoc] = 0;
-								} else {
-									bLocation = (((x>>TTSB)&BTSMask)                 ) |
-												(((y>>TTSB)&BTSMask)  << BTSB        ) |
-												 ((x>>TSB)            << (BTSB+BTSB) ) ;
-									bLocation += ((y>>TSB)<<(BTSB+BTSB))*gridDim.x;
-
-									borderPhiData = phi[bLocation];
-
-									phiTile[borderYLoc][borderXLoc  ]
-											= ( borderPhiData >> shiftTileReg1 ) & 0xFF;
-									phiTile[borderYLoc+1][borderXLoc]
-											= ( borderPhiData >> shiftTileReg2 ) & 0xFF;
-								}
-							}
-
-							BlockChange = 0; // Shared variable
-							change      = 1; // Shared variable
-
-							// Algorithm
-							/////////////////////////////////////////////////////////////////////
-
-							while (change){
-								change = 0;
-
-								for (int tempY = ty+1; tempY <= TILE_SIZE; tempY+=BLOCK_TILE_SIZE ){
-									for (int tempX = tx+1; tempX <= TILE_SIZE; tempX+=BLOCK_TILE_SIZE ){
-
-										if( phiTile[tempY  ][tempX  ]  == 1 &&
-											 (phiTile[tempY+1][tempX  ]  == 3 ||
-												phiTile[tempY-1][tempX  ]  == 3 ||
-												phiTile[tempY  ][tempX-1]  == 3 ||
-												phiTile[tempY  ][tempX+1]  == 3 )){
-											phiTile  [tempY][tempX] = 3;
-											change = 1;
-											BlockChange = 1;
-										} else if ( phiTile[tempY  ][tempX  ]  == 4 &&
-											 (phiTile[tempY+1][tempX  ]  == 0 ||
-												phiTile[tempY-1][tempX  ]  == 0 ||
-												phiTile[tempY  ][tempX-1]  == 0 ||
-												phiTile[tempY  ][tempX+1]  == 0 )){
-											phiTile  [tempY][tempX] = 0;
-											change = 1;
-											BlockChange = 1;
-										}
-									}
-								}
-							}
-
-							if (BlockChange){
-
-								char phiData1 = phiTile[sharedY  ][sharedX  ];
-								char phiData2 = phiTile[sharedY  ][sharedX+1];
-								char phiData3 = phiTile[sharedY+1][sharedX  ];
-								char phiData4 = phiTile[sharedY+1][sharedX+1];
-
-								if (phiData1 ==  4 || phiData2 ==  4 || phiData3 ==  4 || phiData4 ==  4 ||
-										phiData1 == 1 || phiData2 == 1 || phiData3 == 1 || phiData4 == 1){
-									redoBlock = 1;
-								}
-
-								int phiReturnData = phiData1        |
-											 (phiData2 << 8 ) |
-											 (phiData3 << 16) |
-											 (phiData4 << 24);
-
-								phi[location] = phiReturnData;
-
-								if (tx == 0 && ty == 0) {
-									if (!redoBlock){
-										globalBlockIndicator[blockId] = 0;
-									}
-									*globalFinishedVariable = 1;
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-		cudaDeviceSynchronize();
-	} while (atomicExch(globalFinishedVariable,0) && (iterations < max_iterations));
-
-	//step 3
-	for(int tx= 0; tx < dimBlock.x; tx++){
-		for(int ty= 0; ty < dimBlock.y; ty++){
-			for(int bx=0; bx < dimGrid.x; bx++){
-				for(int by=0; by < dimGrid.y; by++){
-					// Including border
-					__shared__ signed char    phiTile[TILE_SIZE+2][TILE_SIZE+2+1]; // input
-					__shared__ signed char phiOutTile[TILE_SIZE+2][TILE_SIZE+2+1]; // output
+				if (localGBI) {
 
 					// Read Input Data into Shared Memory
 					/////////////////////////////////////////////////////////////////////////////////////
-
-					int x = bx<<BTSB;
+					int x = (tx/dimBlock.x)<<BTSB;
 					x = x + tx;
 					x = x<<TTSB;
-					int y = by<<BTSB;
+					int y = (ty/dimBlock.y)<<BTSB;
 					y = y + ty;
 					y = y<<TTSB;
 
@@ -405,159 +238,159 @@ __global__ void evolveContour(
 					location += 	((y>>TSB)<<(BTSB+BTSB))*gridDim.x;
 
 					int phiData = phi[location];
+					int phiDataLeft, phiDataUp;
 
-					int sharedX = tx*THREAD_TILE_SIZE+1;
-					int sharedY = ty*THREAD_TILE_SIZE+1;
+					// int sharedX = tx*THREAD_TILE_SIZE+1;
+					// int sharedY = ty*THREAD_TILE_SIZE+1;
 
-					phiTile[sharedY  ][sharedX  ] = phiData         & 0xFF;
-					phiTile[sharedY  ][sharedX+1] = (phiData >>  8) & 0xFF;
-					phiTile[sharedY+1][sharedX  ] = (phiData >> 16) & 0xFF;
-					phiTile[sharedY+1][sharedX+1] = (phiData >> 24) & 0xFF;
+					phiTilexx = phiData         & 0xFF;
+					phiTilexy = (phiData >>  8) & 0xFF;
+					phiTileyx = (phiData >> 16) & 0xFF;
+					phiTileyy = (phiData >> 24) & 0xFF;
 
-					// Read Border Data into Shared Memory
-					/////////////////////////////////////////////////////////////////////////////////////
-
-					// Registers meant for speed. Two given each thread will update 2 pixels.
-					int shiftTileReg1 = 0;
-					int shiftTileReg2 = 0;
-
-					int borderXLoc = 0;
-					int borderYLoc = 0;
-
-					// Needed Variables
-					int bLocation;
-					int borderPhiData;
-
-					// Update horizontal border
-					borderXLoc = sharedX;
-					if (ty == 0){
-						// Location to write in shared memory
-						borderYLoc = 0;
-						if (by != 0) {
-							// Upper block border
-							y-=THREAD_TILE_SIZE;
-							shiftTileReg1 = 16;
-							shiftTileReg2 = 24;
-						}
-					} else if (ty == BLOCK_TILE_SIZE-1){
-						// Location to write in shared memory
-						borderYLoc = TILE_SIZE+1;
-						if (by != gridDim.y-1) {
-							// Lower block border
-							y+=THREAD_TILE_SIZE;
-							shiftTileReg1 = 0;
-							shiftTileReg2 = 8;
-						}
+					//Gather neighbors
+					if (tx == 0 && ty ==0){
+						phiDataLeft = 0;
+						phiDataUp = 0;
 					}
-					// Read from global and write to shared memory
-					if (ty == 0 || ty == BLOCK_TILE_SIZE-1) {
-						if ((by == 0           && ty == 0                ) ||
-						    (by == gridDim.y-1 && ty == BLOCK_TILE_SIZE-1)){
-							phiTile[borderYLoc][borderXLoc  ] = 0;
-							phiTile[borderYLoc][borderXLoc+1] = 0;
-						} else {
-							bLocation = (((x>>TTSB)&BTSMask)                 ) |
-								    (((y>>TTSB)&BTSMask)  << BTSB        ) |
-								     ((x>>TSB)            << (BTSB+BTSB) ) ;
-							bLocation += ((y>>TSB)<<(BTSB+BTSB))*gridDim.x;
+					else if (tx == 0){
+						phiDataUp = 0;
+						y = ((ty-1)/dimBlock.y)<<BTSB;
+						y = y + ty;
+						y = y<<TTSB;
 
-							borderPhiData = phi[bLocation];
-
-							phiTile[borderYLoc][borderXLoc  ]
-									= ( borderPhiData >> shiftTileReg1 ) & 0xFF;
-							phiTile[borderYLoc][borderXLoc+1]
-									= ( borderPhiData >> shiftTileReg2 ) & 0xFF;
-						}
+						int locationLeft = 	(((x>>TTSB)&BTSMask)                ) |
+								(((y>>TTSB)&BTSMask) << BTSB        ) |
+								((x>>TSB)            << (BTSB+BTSB) ) ;
+						locationLeft += 	((y>>TSB)<<(BTSB+BTSB))*gridDim.x;
+						phiDataLeft = phi[locationLeft];
 					}
+					else if(ty == 0){
+						phiDataLeft = 0;
+						x = ((tx-1)/dimBlock.x)<<BTSB;
+						x = x + tx;
+						x = x<<TTSB;
 
-					// Update vertical border
-					x = bx<<BTSB;
-					x = x + tx;
-					x = x<<TTSB;
-					y = by<<BTSB;
-					y = y + ty;
-					y = y<<TTSB;
-
-					borderYLoc = sharedY;
-					if (tx == 0){
-						// Location to write in shared memory
-						borderXLoc = 0;
-						if (bx != 0) {
-							// Upper block border
-							x-=THREAD_TILE_SIZE;
-							shiftTileReg1 = 8;
-							shiftTileReg2 = 24;
-						}
-					} else if (tx == BLOCK_TILE_SIZE-1){
-						// Location to write in shared memory
-						borderXLoc = TILE_SIZE+1;
-						if (bx != gridDim.x-1) {
-							// Lower block border
-							x+=THREAD_TILE_SIZE;
-							shiftTileReg1 = 0;
-							shiftTileReg2 = 16;
-						}
+						int locationUp = 	(((x>>TTSB)&BTSMask)                ) |
+								(((y>>TTSB)&BTSMask) << BTSB        ) |
+								((x>>TSB)            << (BTSB+BTSB) ) ;
+						locationUp += 	((y>>TSB)<<(BTSB+BTSB))*gridDim.x;
+						phiDataUp = phi[locationUp];
 					}
-					// Read from global and write to shared memory
-					if (tx == 0 || tx == BLOCK_TILE_SIZE-1) {
-						if ((bx == 0           && tx == 0                ) ||
-						    (bx == gridDim.x-1 && tx == BLOCK_TILE_SIZE-1)){
-							phiTile[borderYLoc][borderXLoc  ] = 0;
-							phiTile[borderYLoc+1][borderXLoc] = 0;
-						} else {
-							bLocation = (((x>>TTSB)&BTSMask)                 ) |
-								    (((y>>TTSB)&BTSMask)  << BTSB        ) |
-								     ((x>>TSB)            << (BTSB+BTSB) ) ;
-							bLocation += ((y>>TSB)<<(BTSB+BTSB))*gridDim.x;
+					else{
+						x = ((tx-1)/dimBlock.x)<<BTSB;
+						x = x + tx;
+						x = x<<TTSB;
 
-							borderPhiData = phi[bLocation];
+						int locationUp = 	(((x>>TTSB)&BTSMask)                ) |
+								(((y>>TTSB)&BTSMask) << BTSB        ) |
+								((x>>TSB)            << (BTSB+BTSB) ) ;
+						locationUp += 	((y>>TSB)<<(BTSB+BTSB))*gridDim.x;
+						phiDataUp = phi[locationUp];
 
-							phiTile[borderYLoc][borderXLoc  ]
-									= ( borderPhiData >> shiftTileReg1 ) & 0xFF;
-							phiTile[borderYLoc+1][borderXLoc]
-									= ( borderPhiData >> shiftTileReg2 ) & 0xFF;
-						}
+						x = (tx/dimBlock.x)<<BTSB;
+						x = x + tx;
+						x = x<<TTSB;
+
+						y = ((ty-1)/dimBlock.y)<<BTSB;
+						y = y + ty;
+						y = y<<TTSB;
+
+						int locationLeft = 	(((x>>TTSB)&BTSMask)                ) |
+								(((y>>TTSB)&BTSMask) << BTSB        ) |
+								((x>>TSB)            << (BTSB+BTSB) ) ;
+						locationLeft += 	((y>>TSB)<<(BTSB+BTSB))*gridDim.x;
+						phiDataLeft = phi[locationLeft];
 					}
 
 					// Algorithm
-					/////////////////////////////////////////////////////////////////////////////////////
+					/////////////////////////////////////////////////////////////////////
+					BlockChange = 0; // Shared variable
+					change      = 1; // Shared variable
+					// unsigned char phiTileUpxx = phiDataUp         & 0xFF;
+					// unsigned char phiTileUpxy = (phiDataUp >>  8) & 0xFF;
+					unsigned char phiTileUpyx = (phiDataUp >> 16) & 0xFF;
+					// unsigned char phiTileUpyy = (phiDataUp >> 24) & 0xFF;
 
-					for (int tempY = ty+1; tempY <= TILE_SIZE; tempY+=BLOCK_TILE_SIZE ){
-						for (int tempX = tx+1; tempX <= TILE_SIZE; tempX+=BLOCK_TILE_SIZE ){
+					// unsigned char phiTileLeftxx = phiDataLeft         & 0xFF;
+					unsigned char phiTileLeftxy = (phiDataLeft >>  8) & 0xFF;
+					// unsigned char phiTileLeftyx = (phiDataLeft >> 16) & 0xFF;
+					// unsigned char phiTileLeftyy = (phiDataLeft >> 24) & 0xFF;
 
-							if(phiTile[tempY][tempX] > 2) {
-								if(phiTile[tempY+1][tempX]  > 2 &&
-								   phiTile[tempY-1][tempX]  > 2 &&
-								   phiTile[tempY][tempX+1]  > 2 &&
-								   phiTile[tempY][tempX-1]  > 2 ){
-									phiOutTile[tempY][tempX] = 0xFD;
-								} else
-									phiOutTile[tempY][tempX] = 0xFF;
-							} else
-								if(phiTile[tempY+1][tempX]  > 2 ||
-								   phiTile[tempY-1][tempX]  > 2 ||
-								   phiTile[tempY][tempX+1]  > 2 ||
-								   phiTile[tempY][tempX-1]  > 2 ){
-									phiOutTile[tempY][tempX] = 1;
-								} else
-									phiOutTile[tempY][tempX] = 3;
-						}
+					while (change){
+							change = 0;
+
+							if( phiTilexx  == 1 &&
+								 (phiTileUpyx  == 3 ||
+									phiTilexy  == 3 ||
+									phiTileyx  == 3 ||
+									phiTileLeftxy  == 3 )){
+								phiTilexx = 3;
+								change = 1;
+								BlockChange = 1;
+							} else if ( phiTilexx  == 4 &&
+								 (phiTileUpyx  == 0 ||
+									phiTilexy  == 0 ||
+									phiTileyx  == 0 ||
+									phiTileLeftxy  == 0 )){
+								phiTilexx = 0;
+								change = 1;
+								BlockChange = 1;
+							}
 					}
 
-					// Write back to main memory
-					int phiData1 = phiOutTile[sharedY  ][sharedX  ] & 0xFF;
-				        int phiData2 = phiOutTile[sharedY  ][sharedX+1] & 0xFF;
-				        int phiData3 = phiOutTile[sharedY+1][sharedX  ] & 0xFF;
-				        int phiData4 = phiOutTile[sharedY+1][sharedX+1] & 0xFF;
 
-				        int phiReturnData = phiData1        |
-							   (phiData2 << 8 ) |
-							   (phiData3 << 16) |
-							   (phiData4 << 24);
+					if (BlockChange){
 
-					phiOut[location] = phiReturnData;
+						char phiData1 = phiTilexx;
+						char phiData2 = phiTilexy;
+						char phiData3 = phiTileyx;
+						char phiData4 = phiTileyy;
+
+						if (phiData1 ==  4 || phiData2 ==  4 || phiData3 ==  4 || phiData4 ==  4 ||
+								phiData1 == 1 || phiData2 == 1 || phiData3 == 1 || phiData4 == 1){
+							redoBlock = 1;
+						}
+
+						int phiReturnData = phiData1        |
+									 (phiData2 << 8 ) |
+									 (phiData3 << 16) |
+									 (phiData4 << 24);
+
+						phi[location] = phiReturnData;
+
+						if (tx == 0 && ty == 0) {
+							if (!redoBlock){
+								globalBlockIndicator[blockId] = 0;
+							}
+							*globalFinishedVariable = 1;
+						}
+					}
 				}
 			}
+		}
+	} while (atomicExch(globalFinishedVariable,0) && (iterations < max_iterations));
+
+	//step 3
+	// Including border
+
+	for(int tx= 0; tx < dimBlock.x*dimGrid.x; tx++){
+		for(int ty= 0; ty < dimBlock.y*dimGrid.y; ty++){
+					// Read Input Data into Shared Memory
+					/////////////////////////////////////////////////////////////////////////////////////
+					int x = (tx/dimBlock.x)<<BTSB;
+					x = x + tx;
+					x = x<<TTSB;
+					int y = (ty/dimBlock.y)<<BTSB;
+					y = y + ty;
+					y = y<<TTSB;
+
+					int location = 	(((x>>TTSB)&BTSMask)                ) |
+							(((y>>TTSB)&BTSMask) << BTSB        ) |
+							((x>>TSB)            << (BTSB+BTSB) ) ;
+					location += 	((y>>TSB)<<(BTSB+BTSB))*gridDim.x;
+
+					phiOut[location] = phi[location];
 		}
 	}
 
@@ -587,8 +420,11 @@ unsigned char *levelSetSegment(
 		}
 	#endif
 
-	int gridXSize = 1 + (( width - 1) / TILE_SIZE);
-	int gridYSize = 1 + ((height - 1) / TILE_SIZE);
+	// int gridXSize = 1 + (( width - 1) / TILE_SIZE);
+	// int gridYSize = 1 + ((height - 1) / TILE_SIZE);
+	//by FNP
+	int gridXSize = ((width/4 + TILE_SIZE -1) / TILE_SIZE);
+	int gridYSize = ((height/4 + TILE_SIZE-1) / TILE_SIZE);
 
 	#if defined(DEBUG)
 		printf("\n Grid Size: %d %d\n", gridYSize, gridXSize);
