@@ -1,0 +1,29 @@
+==2217== NVPROF is profiling process 2217, command: ./acclNonNP
+==2217== Some kernel(s) will be replayed on device 0 in order to collect all events/metrics.
+==2217== Profiling application: ./acclNonNP
+==2217== Profiling result:
+==2217== Metric result:
+Invocations                               Metric Name                        Metric Description         Min         Max         Avg
+Device "GeForce GTX TITAN (0)"
+	Kernel: findSpansKernel(int*, int*, int const *, int, int)
+          2                    issue_slot_utilization                    Issue Slot Utilization      19.35%      19.37%      19.36%
+          2                     l1_shared_utilization              L1/Shared Memory Utilization     Low (1)     Low (1)     Low (1)
+          2                            l2_utilization                      L2 Cache Utilization     Low (1)     Low (1)     Low (1)
+          2                           tex_utilization                 Texture Cache Utilization    Idle (0)    Idle (0)    Idle (0)
+          2                          dram_utilization                 Device Memory Utilization     Low (1)     Low (1)     Low (1)
+          2                        sysmem_utilization                 System Memory Utilization     Low (1)     Low (1)     Low (1)
+          2                       ldst_fu_utilization      Load/Store Function Unit Utilization     Mid (5)     Mid (5)     Mid (5)
+          2                        alu_fu_utilization      Arithmetic Function Unit Utilization     Low (2)     Low (2)     Low (2)
+          2                         cf_fu_utilization    Control-Flow Function Unit Utilization     Low (1)     Low (1)     Low (1)
+          2                        tex_fu_utilization         Texture Function Unit Utilization    Idle (0)    Idle (0)    Idle (0)
+	Kernel: mergeSpansKernel(int*, int*, int, int, int)
+          2                    issue_slot_utilization                    Issue Slot Utilization       0.78%       0.78%       0.78%
+          2                     l1_shared_utilization              L1/Shared Memory Utilization     Low (1)     Low (1)     Low (1)
+          2                            l2_utilization                      L2 Cache Utilization     Low (1)     Low (1)     Low (1)
+          2                           tex_utilization                 Texture Cache Utilization    Idle (0)    Idle (0)    Idle (0)
+          2                          dram_utilization                 Device Memory Utilization     Low (1)     Low (1)     Low (1)
+          2                        sysmem_utilization                 System Memory Utilization     Low (1)     Low (1)     Low (1)
+          2                       ldst_fu_utilization      Load/Store Function Unit Utilization     Low (1)     Low (1)     Low (1)
+          2                        alu_fu_utilization      Arithmetic Function Unit Utilization     Low (1)     Low (1)     Low (1)
+          2                         cf_fu_utilization    Control-Flow Function Unit Utilization     Low (1)     Low (1)     Low (1)
+          2                        tex_fu_utilization         Texture Function Unit Utilization    Idle (0)    Idle (0)    Idle (0)
